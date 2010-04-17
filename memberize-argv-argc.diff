@@ -1,18 +1,8 @@
 diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
 --- a/js/src/xpconnect/src/xpcwrappednative.cpp
 +++ b/js/src/xpconnect/src/xpcwrappednative.cpp
-@@ -2125,16 +2125,19 @@ class CallMethodHelper
-     nsIInterfaceInfo* const mIFaceInfo;
-     const nsXPTMethodInfo* mMethodInfo;
-     const uint16 mVTableIndex;
-     const jsid mIdxValueId;
+@@ -2132,16 +2132,19 @@ class CallMethodHelper
  
-     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
-     uint8 mOptArgcIndex; // TODO make const
- 
-+    jsval* const mArgv;
-+    const PRUint32 mArgc;
-+
      // Reserve space for one nsAutoString. We don't want the string itself
      // to be declared as that would make the ctor and dtors run for each
      // CallMethodHelper instantiation, and they're only needed in a
@@ -20,7 +10,17 @@ diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xp
      char mAutoString[sizeof(nsAutoString)];
      PRBool mAutoStringUsed;
  
++    jsval* const mArgv;
++    const PRUint32 mArgc;
++
      enum SizeMode {
+         eGetSize,
+         eGetLength
+     };
+ 
+     JSBool
+     GetArrayInfoFromParam(uint8 paramIndex, SizeMode mode,
+                           JSUint32* result) const;
 @@ -2170,16 +2173,19 @@ public:
      CallMethodHelper(XPCCallContext* ccx)
          : mCallContext(ccx)
