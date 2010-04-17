@@ -1,0 +1,239 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2125,16 +2125,19 @@ class CallMethodHelper
+     nsIInterfaceInfo* const mIFaceInfo;
+     const nsXPTMethodInfo* mMethodInfo;
+     const uint16 mVTableIndex;
+     const jsid mIdxValueId;
+ 
+     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
+     uint8 mOptArgcIndex; // TODO make const
+ 
++    jsval* const mArgv;
++    const PRUint32 mArgc;
++
+     // Reserve space for one nsAutoString. We don't want the string itself
+     // to be declared as that would make the ctor and dtors run for each
+     // CallMethodHelper instantiation, and they're only needed in a
+     // fraction of all the calls that come through here.
+     char mAutoString[sizeof(nsAutoString)];
+     PRBool mAutoStringUsed;
+ 
+     enum SizeMode {
+@@ -2170,16 +2173,19 @@ public:
+     CallMethodHelper(XPCCallContext* ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx->GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mVTableIndex(ccx->GetMethodIndex())
+         , mIdxValueId(ccx->GetRuntime()->GetStringID(XPCJSRuntime::IDX_VALUE))
+         , mOptArgcIndex(PR_UINT8_MAX)
+         , mAutoStringUsed(PR_FALSE)
++        , mArgv(ccx->GetArgv())
++        , mArgc(ccx->GetArgc())
++
+     {
+         // Success checked later.
+         mIFaceInfo->GetMethodInfo(mVTableIndex, &mMethodInfo);
+     }
+ 
+     ~CallMethodHelper();
+ 
+     JSBool Call();
+@@ -2258,37 +2264,35 @@ CallMethodHelper::Call()
+     nsresult invokeResult;
+     nsID param_iid;
+     uintN err;
+     JSBool foundDependentParam;
+ 
+     XPCContext* xpcc = mCallContext->GetXPCContext();
+     nsISupports* callee = mCallContext->GetTearOff()->GetNative();
+     XPCPerThreadData* tls = mCallContext->GetThreadData();
+-    jsval* argv = mCallContext->GetArgv();
+-    PRUint32 argc = mCallContext->GetArgc();
+ 
+     mCallContext->SetRetVal(JSVAL_VOID);
+ 
+     tls->SetException(nsnull);
+     xpcc->SetLastResult(NS_ERROR_UNEXPECTED);
+ 
+     // fast-path QueryInterface: we already know the signature and can avoid a
+     // lot of work
+     if(mVTableIndex == 0)
+     {
+-        if(argc < 1)
++        if(mArgc < 1)
+         {
+             Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, (*mCallContext));
+             return JS_FALSE;
+         }
+         const nsID* iid;
+         JSObject* obj;
+-        if(!JSVAL_IS_OBJECT(argv[0]) ||
+-           (!(obj = JSVAL_TO_OBJECT(argv[0]))) ||
++        if(!JSVAL_IS_OBJECT(mArgv[0]) ||
++           (!(obj = JSVAL_TO_OBJECT(mArgv[0]))) ||
+            (!(iid = xpc_JSObjectToID((*mCallContext), obj))))
+         {
+             ThrowBadParam(NS_ERROR_XPC_BAD_CONVERT_JS, 0, (*mCallContext));
+             return JS_FALSE;
+         }
+ 
+         nsISupports* qiresult = nsnull;
+         {
+@@ -2337,26 +2341,26 @@ CallMethodHelper::Call()
+     wantsOptArgc = mMethodInfo->WantsOptArgc() ? 1 : 0;
+ 
+     // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
+     paramCount = mMethodInfo->GetParamCount();
+     requiredArgs = paramCount;
+     if(paramCount && mMethodInfo->GetParam(paramCount-1).IsRetval())
+         requiredArgs--;
+ 
+-    if(argc < requiredArgs || wantsOptArgc)
++    if(mArgc < requiredArgs || wantsOptArgc)
+     {
+         if(wantsOptArgc)
+             mOptArgcIndex = requiredArgs;
+ 
+         // skip over any optional arguments
+         while(requiredArgs && mMethodInfo->GetParam(requiredArgs-1).IsOptional())
+             requiredArgs--;
+ 
+-        if(argc < requiredArgs) {
++        if(mArgc < requiredArgs) {
+             Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, (*mCallContext));
+             return JS_FALSE;
+         }
+     }
+ 
+     // iterate through the params to clear flags (for safe cleanup later)
+     for(i = 0; i < paramCount + wantsOptArgc; i++)
+     {
+@@ -2485,19 +2489,19 @@ CallMethodHelper::Call()
+                     useAllocator = JS_TRUE;
+                     break;
+                 }
+             }
+ 
+             // Do this *after* the above because in the case where we have a
+             // "T_DOMSTRING && IsDipper()" then arg might be null since this
+             // is really an 'out' param masquerading as an 'in' param.
+-            NS_ASSERTION(i < argc || paramInfo.IsOptional(),
++            NS_ASSERTION(i < mArgc || paramInfo.IsOptional(),
+                          "Expected either enough arguments or an optional argument");
+-            src = i < argc ? argv[i] : JSVAL_NULL;
++            src = i < mArgc ? mArgv[i] : JSVAL_NULL;
+         }
+ 
+         if(type_tag == nsXPTType::T_INTERFACE &&
+            NS_FAILED(mIFaceInfo->GetIIDForParamNoAlloc(mVTableIndex, &paramInfo,
+                                                &param_iid)))
+         {
+             ThrowBadParam(NS_ERROR_XPC_CANT_GET_PARAM_IFACE_INFO, i, (*mCallContext));
+             return JS_FALSE;
+@@ -2573,19 +2577,19 @@ CallMethodHelper::Call()
+                     dp->SetValIsAllocated();
+                 }
+ 
+                 if(!paramInfo.IsIn())
+                     continue;
+             }
+             else
+             {
+-                NS_ASSERTION(i < argc || paramInfo.IsOptional(),
++                NS_ASSERTION(i < mArgc || paramInfo.IsOptional(),
+                              "Expected either enough arguments or an optional argument");
+-                src = i < argc ? argv[i] : JSVAL_NULL;
++                src = i < mArgc ? mArgv[i] : JSVAL_NULL;
+ 
+                 if(datum_type.IsPointer() &&
+                    datum_type.TagPart() == nsXPTType::T_IID)
+                 {
+                     useAllocator = JS_TRUE;
+                     dp->SetValIsAllocated();
+                 }
+             }
+@@ -2651,17 +2655,17 @@ CallMethodHelper::Call()
+             // The method has a return value, the return value must be
+             // last so push it out one so that we'll have room to
+             // insert the optional argc argument.
+             mDispatchParams[paramCount] = *dp;
+         }
+ 
+         dp->ClearFlags();
+         dp->type = nsXPTType::T_U8;
+-        dp->val.u8 = argc - requiredArgs;
++        dp->val.u8 = mArgc - requiredArgs;
+     }
+ 
+     // do the invoke
+     {
+         uint8 allParamCount = paramCount + wantsOptArgc;
+         if(XPCPerThreadData::IsMainThread((*mCallContext)))
+         {
+             invokeResult = NS_InvokeByIndex(callee, mVTableIndex,
+@@ -2768,22 +2772,22 @@ CallMethodHelper::Call()
+             }
+         }
+ 
+         if(paramInfo.IsRetval())
+         {
+             if(!mCallContext->GetReturnValueWasSet())
+                 mCallContext->SetRetVal(v);
+         }
+-        else if(i < argc)
++        else if(i < mArgc)
+         {
+             // we actually assured this before doing the invoke
+-            NS_ASSERTION(JSVAL_IS_OBJECT(argv[i]), "out var is not object");
++            NS_ASSERTION(JSVAL_IS_OBJECT(mArgv[i]), "out var is not object");
+             if(!JS_SetPropertyById((*mCallContext),
+-                                   JSVAL_TO_OBJECT(argv[i]),
++                                   JSVAL_TO_OBJECT(mArgv[i]),
+                                    mIdxValueId, &v))
+             {
+                 ThrowBadParam(NS_ERROR_XPC_CANT_SET_OUT_VAL, i, (*mCallContext));
+                 return JS_FALSE;
+             }
+         }
+         else
+         {
+@@ -2938,32 +2942,28 @@ CallMethodHelper::GetInterfaceTypeFromPa
+ JSBool
+ CallMethodHelper::GetOutParamSource(uint8 paramIndex, jsval* srcp) const
+ {
+     const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(paramIndex);
+     
+     if((paramInfo.IsOut() || paramInfo.IsDipper()) &&
+        !paramInfo.IsRetval())
+     {
+-        // TODO memberize/constify these
+-        jsval* argv = mCallContext->GetArgv();
+-        PRUint32 argc = mCallContext->GetArgc();
+-        
+-        NS_ASSERTION(paramIndex < argc || paramInfo.IsOptional(),
++        NS_ASSERTION(paramIndex < mArgc || paramInfo.IsOptional(),
+                      "Expected either enough arguments or an optional argument");
+-        jsval arg = paramIndex < argc ? argv[paramIndex] : JSVAL_NULL;
+-        if(paramIndex < argc &&
++        jsval arg = paramIndex < mArgc ? mArgv[paramIndex] : JSVAL_NULL;
++        if(paramIndex < mArgc &&
+            (JSVAL_IS_PRIMITIVE(arg) ||
+             !JS_GetPropertyById(*mCallContext,
+                                 JSVAL_TO_OBJECT(arg),
+                                 mIdxValueId,
+                                 srcp)))
+         {
+             // Explicitly passed in unusable value for out param.  Note
+-            // that if i >= argc we already know that |arg| is JSVAL_NULL,
++            // that if i >= mArgc we already know that |arg| is JSVAL_NULL,
+             // and that's ok.
+             ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, paramIndex,
+                           *mCallContext);
+             return JS_FALSE;
+         }
+     }
+ 
+     return JS_TRUE;

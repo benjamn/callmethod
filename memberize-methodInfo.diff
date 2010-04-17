@@ -1,0 +1,241 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2202,34 +2202,39 @@ GetInterfaceTypeFromParam(XPCCallContext
+ }
+ 
+ /***************************************************************************/
+ 
+ class CallMethodHelper
+ {
+     XPCCallContext* const mCallContext;
+     nsIInterfaceInfo* const mIFaceInfo;
++    const nsXPTMethodInfo* mMethodInfo;
+     const uint16 mVTableIndex;
+ 
+     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
+ 
+     // Reserve space for one nsAutoString. We don't want the string itself
+     // to be declared as that would make the ctor and dtors run for each
+     // CallMethodHelper instantiation, and they're only needed in a
+     // fraction of all the calls that come through here.
+     char mAutoString[sizeof(nsAutoString)];
+     PRBool mAutoStringUsed;
+ 
+ public:
+     CallMethodHelper(XPCCallContext* ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx->GetInterface()->GetInterfaceInfo())
++        , mMethodInfo(nsnull)
+         , mVTableIndex(ccx->GetMethodIndex())
+         , mAutoStringUsed(PR_FALSE)
+-    {}
++    {
++        // Success checked later.
++        mIFaceInfo->GetMethodInfo(mVTableIndex, &mMethodInfo);
++    }
+     JSBool Call();
+ };
+ 
+ // static
+ NS_SUPPRESS_STACK_CHECK JSBool
+ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
+                              CallMode mode /*= CALL_METHOD */)
+ {
+@@ -2293,17 +2298,16 @@ XPCWrappedNative::CallMethod(XPCCallCont
+ JSBool
+ CallMethodHelper::Call()
+ {
+     // From here on ALL exits are through 'goto done;'
+ 
+     JSBool retval = JS_FALSE;
+ 
+     uint8 i;
+-    const nsXPTMethodInfo* methodInfo;
+     uint8 requiredArgs;
+     uint8 paramCount;
+     uint8 wantsOptArgc;
+     uint8 optArgcIndex = PR_UINT8_MAX;
+     jsval src;
+     nsresult invokeResult;
+     nsID param_iid;
+     uintN err;
+@@ -2372,37 +2376,37 @@ CallMethodHelper::Call()
+             ThrowBadParam(err, 0, (*mCallContext));
+             return JS_FALSE;
+         }
+ 
+         mCallContext->SetRetVal(v);
+         return JS_TRUE;
+     }
+ 
+-    if(NS_FAILED(mIFaceInfo->GetMethodInfo(mVTableIndex, &methodInfo)))
++    if(!mMethodInfo)
+     {
+         Throw(NS_ERROR_XPC_CANT_GET_METHOD_INFO, (*mCallContext));
+         goto done;
+     }
+ 
+-    wantsOptArgc = methodInfo->WantsOptArgc() ? 1 : 0;
++    wantsOptArgc = mMethodInfo->WantsOptArgc() ? 1 : 0;
+ 
+     // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
+-    paramCount = methodInfo->GetParamCount();
++    paramCount = mMethodInfo->GetParamCount();
+     requiredArgs = paramCount;
+-    if(paramCount && methodInfo->GetParam(paramCount-1).IsRetval())
++    if(paramCount && mMethodInfo->GetParam(paramCount-1).IsRetval())
+         requiredArgs--;
+ 
+     if(argc < requiredArgs || wantsOptArgc)
+     {
+         if(wantsOptArgc)
+             optArgcIndex = requiredArgs;
+ 
+         // skip over any optional arguments
+-        while(requiredArgs && methodInfo->GetParam(requiredArgs-1).IsOptional())
++        while(requiredArgs && mMethodInfo->GetParam(requiredArgs-1).IsOptional())
+             requiredArgs--;
+ 
+         if(argc < requiredArgs) {
+             Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, (*mCallContext));
+             goto done;
+         }
+     }
+ 
+@@ -2417,17 +2421,17 @@ CallMethodHelper::Call()
+     // Iterate through the params doing conversions of independent params only.
+     // When we later convert the dependent params (if any) we will know that
+     // the params upon which they depend will have already been converted -
+     // regardless of ordering.
+     foundDependentParam = JS_FALSE;
+     for(i = 0; i < paramCount; i++)
+     {
+         JSBool useAllocator = JS_FALSE;
+-        const nsXPTParamInfo& paramInfo = methodInfo->GetParam(i);
++        const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+         const nsXPTType& type = paramInfo.GetType();
+         uint8 type_tag = type.TagPart();
+ 
+         if(type.IsDependent())
+         {
+             foundDependentParam = JS_TRUE;
+             continue;
+         }
+@@ -2577,17 +2581,17 @@ CallMethodHelper::Call()
+         }
+     }
+ 
+     // if any params were dependent, then we must iterate again to convert them.
+     if(foundDependentParam)
+     {
+         for(i = 0; i < paramCount; i++)
+         {
+-            const nsXPTParamInfo& paramInfo = methodInfo->GetParam(i);
++            const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+             const nsXPTType& type = paramInfo.GetType();
+ 
+             if(!type.IsDependent())
+                 continue;
+ 
+             nsXPTType datum_type;
+             JSUint32 array_count;
+             JSUint32 array_capacity;
+@@ -2667,27 +2671,27 @@ CallMethodHelper::Call()
+                    datum_type.TagPart() == nsXPTType::T_IID)
+                 {
+                     useAllocator = JS_TRUE;
+                     dp->SetValIsAllocated();
+                 }
+             }
+ 
+             if(datum_type.IsInterfacePointer() &&
+-               !GetInterfaceTypeFromParam((*mCallContext), mIFaceInfo, methodInfo, paramInfo,
++               !GetInterfaceTypeFromParam((*mCallContext), mIFaceInfo, mMethodInfo, paramInfo,
+                                           mVTableIndex, i, datum_type,
+                                           mDispatchParams.Elements(), &param_iid))
+                 goto done;
+ 
+             if(isArray || isSizedString)
+             {
+-                if(!GetArraySizeFromParam((*mCallContext), mIFaceInfo, methodInfo, paramInfo,
++                if(!GetArraySizeFromParam((*mCallContext), mIFaceInfo, mMethodInfo, paramInfo,
+                                           mVTableIndex, i, GET_SIZE,
+                                           mDispatchParams.Elements(), &array_capacity)||
+-                   !GetArraySizeFromParam((*mCallContext), mIFaceInfo, methodInfo, paramInfo,
++                   !GetArraySizeFromParam((*mCallContext), mIFaceInfo, mMethodInfo, paramInfo,
+                                           mVTableIndex, i, GET_LENGTH,
+                                           mDispatchParams.Elements(), &array_count))
+                     goto done;
+ 
+                 if(isArray)
+                 {
+                     if(array_count &&
+                        !XPCConvert::JSArray2Native((*mCallContext), (void**)&dp->val, src,
+@@ -2777,17 +2781,17 @@ CallMethodHelper::Call()
+     // now we iterate through the native params to gather and convert results
+     for(i = 0; i < paramCount; i++)
+     {
+         uint8 dispatchParamIndex = i;
+ 
+         if (i >= optArgcIndex)
+             dispatchParamIndex++;
+ 
+-        const nsXPTParamInfo& paramInfo = methodInfo->GetParam(i);
++        const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+         if(!paramInfo.IsOut() && !paramInfo.IsDipper())
+             continue;
+ 
+         const nsXPTType& type = paramInfo.GetType();
+         nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
+         jsval v = JSVAL_NULL;
+         AUTO_MARK_JSVAL((*mCallContext), &v);
+         JSUint32 array_count;
+@@ -2807,24 +2811,24 @@ CallMethodHelper::Call()
+                 goto done;
+             }
+         }
+         else
+             datum_type = type;
+ 
+         if(isArray || isSizedString)
+         {
+-            if(!GetArraySizeFromParam((*mCallContext), mIFaceInfo, methodInfo, paramInfo,
++            if(!GetArraySizeFromParam((*mCallContext), mIFaceInfo, mMethodInfo, paramInfo,
+                                       mVTableIndex, i, GET_LENGTH, mDispatchParams.Elements(),
+                                       &array_count))
+                 goto done;
+         }
+ 
+         if(datum_type.IsInterfacePointer() &&
+-           !GetInterfaceTypeFromParam((*mCallContext), mIFaceInfo, methodInfo, paramInfo,
++           !GetInterfaceTypeFromParam((*mCallContext), mIFaceInfo, mMethodInfo, paramInfo,
+                                       mVTableIndex, i, datum_type, mDispatchParams.Elements(),
+                                       &param_iid))
+             goto done;
+ 
+         if(isArray)
+         {
+             XPCLazyCallContext lccx((*mCallContext));
+             if(!XPCConvert::NativeArray2JS(lccx, &v, (const void**)&dp->val,
+@@ -2903,18 +2907,18 @@ done:
+             if(dp->IsValArray())
+             {
+                 // going to have to cleanup the array and perhaps its contents
+                 if(dp->IsValAllocated() || dp->IsValInterface())
+                 {
+                     // we need to figure out how many elements are present.
+                     JSUint32 array_count;
+ 
+-                    const nsXPTParamInfo& paramInfo = methodInfo->GetParam(i);
+-                    if(!GetArraySizeFromParam((*mCallContext), mIFaceInfo, methodInfo,
++                    const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
++                    if(!GetArraySizeFromParam((*mCallContext), mIFaceInfo, mMethodInfo,
+                                               paramInfo, mVTableIndex,
+                                               i, GET_LENGTH, mDispatchParams.Elements(),
+                                               &array_count))
+                     {
+                         NS_ERROR("failed to get array length, we'll leak here");
+                         continue;
+                     }
+                     if(dp->IsValAllocated())

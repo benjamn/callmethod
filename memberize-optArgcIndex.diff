@@ -1,0 +1,134 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2206,30 +2206,32 @@ GetInterfaceTypeFromParam(XPCCallContext
+ class CallMethodHelper
+ {
+     XPCCallContext* const mCallContext;
+     nsIInterfaceInfo* const mIFaceInfo;
+     const nsXPTMethodInfo* mMethodInfo;
+     const uint16 mVTableIndex;
+ 
+     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
++    uint8 mOptArgcIndex; // TODO make const
+ 
+     // Reserve space for one nsAutoString. We don't want the string itself
+     // to be declared as that would make the ctor and dtors run for each
+     // CallMethodHelper instantiation, and they're only needed in a
+     // fraction of all the calls that come through here.
+     char mAutoString[sizeof(nsAutoString)];
+     PRBool mAutoStringUsed;
+ 
+ public:
+     CallMethodHelper(XPCCallContext* ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx->GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mVTableIndex(ccx->GetMethodIndex())
++        , mOptArgcIndex(PR_UINT8_MAX)
+         , mAutoStringUsed(PR_FALSE)
+     {
+         // Success checked later.
+         mIFaceInfo->GetMethodInfo(mVTableIndex, &mMethodInfo);
+     }
+     JSBool Call();
+ };
+ 
+@@ -2301,17 +2303,16 @@ CallMethodHelper::Call()
+     // From here on ALL exits are through 'goto done;'
+ 
+     JSBool retval = JS_FALSE;
+ 
+     uint8 i;
+     uint8 requiredArgs;
+     uint8 paramCount;
+     uint8 wantsOptArgc;
+-    uint8 optArgcIndex = PR_UINT8_MAX;
+     jsval src;
+     nsresult invokeResult;
+     nsID param_iid;
+     uintN err;
+     JSBool foundDependentParam;
+ 
+     XPCJSRuntime* rt = mCallContext->GetRuntime();
+     XPCContext* xpcc = mCallContext->GetXPCContext();
+@@ -2393,17 +2394,17 @@ CallMethodHelper::Call()
+     paramCount = mMethodInfo->GetParamCount();
+     requiredArgs = paramCount;
+     if(paramCount && mMethodInfo->GetParam(paramCount-1).IsRetval())
+         requiredArgs--;
+ 
+     if(argc < requiredArgs || wantsOptArgc)
+     {
+         if(wantsOptArgc)
+-            optArgcIndex = requiredArgs;
++            mOptArgcIndex = requiredArgs;
+ 
+         // skip over any optional arguments
+         while(requiredArgs && mMethodInfo->GetParam(requiredArgs-1).IsOptional())
+             requiredArgs--;
+ 
+         if(argc < requiredArgs) {
+             Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, (*mCallContext));
+             goto done;
+@@ -2730,19 +2731,19 @@ CallMethodHelper::Call()
+                 }
+             }
+         }
+     }
+ 
+     // Fill in the optional_argc argument
+     if(wantsOptArgc)
+     {
+-        nsXPTCVariant* dp = &mDispatchParams[optArgcIndex];
+-
+-        if(optArgcIndex != paramCount)
++        nsXPTCVariant* dp = &mDispatchParams[mOptArgcIndex];
++
++        if(mOptArgcIndex != paramCount)
+         {
+             // The method has a return value, the return value must be
+             // last so push it out one so that we'll have room to
+             // insert the optional argc argument.
+             mDispatchParams[paramCount] = *dp;
+         }
+ 
+         dp->ClearFlags();
+@@ -2778,17 +2779,17 @@ CallMethodHelper::Call()
+         goto done;
+     }
+ 
+     // now we iterate through the native params to gather and convert results
+     for(i = 0; i < paramCount; i++)
+     {
+         uint8 dispatchParamIndex = i;
+ 
+-        if (i >= optArgcIndex)
++        if (i >= mOptArgcIndex)
+             dispatchParamIndex++;
+ 
+         const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+         if(!paramInfo.IsOut() && !paramInfo.IsDipper())
+             continue;
+ 
+         const nsXPTType& type = paramInfo.GetType();
+         nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
+@@ -2891,17 +2892,17 @@ done:
+     // iterate through the params (again!) and clean up
+     // any alloc'd stuff and release wrappers of params
+     if(mDispatchParams.Length())
+     {
+         for(i = 0; i < paramCount; i++)
+         {
+             uint8 dispatchParamIndex = i;
+ 
+-            if (i >= optArgcIndex)
++            if (i >= mOptArgcIndex)
+                 dispatchParamIndex++;
+ 
+             nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
+             void* p = dp->val.p;
+             if(!p)
+                 continue;
+ 
+             if(dp->IsValArray())

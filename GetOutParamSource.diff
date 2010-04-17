@@ -1,0 +1,233 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2120,16 +2120,17 @@ static JSBool Throw(uintN errNum, XPCCal
+ /***************************************************************************/
+ 
+ class CallMethodHelper
+ {
+     XPCCallContext* const mCallContext;
+     nsIInterfaceInfo* const mIFaceInfo;
+     const nsXPTMethodInfo* mMethodInfo;
+     const uint16 mVTableIndex;
++    const jsid mIdxValueId;
+ 
+     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
+     uint8 mOptArgcIndex; // TODO make const
+ 
+     // Reserve space for one nsAutoString. We don't want the string itself
+     // to be declared as that would make the ctor and dtors run for each
+     // CallMethodHelper instantiation, and they're only needed in a
+     // fraction of all the calls that come through here.
+@@ -2157,23 +2158,26 @@ class CallMethodHelper
+         return GetArrayInfoFromParam(paramIndex, eGetLength, result);
+     }
+ 
+     JSBool
+     GetInterfaceTypeFromParam(uint8 paramIndex,
+                               const nsXPTType& datum_type,
+                               nsID* result) const;
+     
++    JSBool GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
++
+ public:
+ 
+     CallMethodHelper(XPCCallContext* ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx->GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mVTableIndex(ccx->GetMethodIndex())
++        , mIdxValueId(ccx->GetRuntime()->GetStringID(XPCJSRuntime::IDX_VALUE))
+         , mOptArgcIndex(PR_UINT8_MAX)
+         , mAutoStringUsed(PR_FALSE)
+     {
+         // Success checked later.
+         mIFaceInfo->GetMethodInfo(mVTableIndex, &mMethodInfo);
+     }
+ 
+     ~CallMethodHelper();
+@@ -2246,23 +2250,21 @@ XPCWrappedNative::CallMethod(XPCCallCont
+ 
+ JSBool
+ CallMethodHelper::Call()
+ {
+     uint8 i;
+     uint8 requiredArgs;
+     uint8 paramCount;
+     uint8 wantsOptArgc;
+-    jsval src;
+     nsresult invokeResult;
+     nsID param_iid;
+     uintN err;
+     JSBool foundDependentParam;
+ 
+-    XPCJSRuntime* rt = mCallContext->GetRuntime();
+     XPCContext* xpcc = mCallContext->GetXPCContext();
+     nsISupports* callee = mCallContext->GetTearOff()->GetNative();
+     XPCPerThreadData* tls = mCallContext->GetThreadData();
+     jsval* argv = mCallContext->GetArgv();
+     PRUint32 argc = mCallContext->GetArgc();
+ 
+     mCallContext->SetRetVal(JSVAL_VOID);
+ 
+@@ -2384,37 +2386,20 @@ CallMethodHelper::Call()
+         nsXPTCVariant* dp = &mDispatchParams[i];
+         dp->type = type;
+ 
+         if(type_tag == nsXPTType::T_INTERFACE)
+         {
+             dp->SetValIsInterface();
+         }
+ 
+-        // set 'src' to be the object from which we get the value and
+-        // prepare for out param
+-
+-        if((paramInfo.IsOut() || paramInfo.IsDipper()) &&
+-           !paramInfo.IsRetval()) {
+-          NS_ASSERTION(i < argc || paramInfo.IsOptional(),
+-                       "Expected either enough arguments or an optional argument");
+-          jsval arg = i < argc ? argv[i] : JSVAL_NULL;
+-          if((JSVAL_IS_PRIMITIVE(arg) ||
+-              !JS_GetPropertyById((*mCallContext), JSVAL_TO_OBJECT(arg),
+-                                  rt->GetStringID(XPCJSRuntime::IDX_VALUE),
+-                                  &src))
+-             && i < argc)
+-          {
+-              // Explicitly passed in unusable value for out param.  Note that
+-              // if i >= argc we already know that |arg| is JSVAL_NULL, and
+-              // that's ok.
+-              ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, i, (*mCallContext));
+-              return JS_FALSE;
+-          }
+-        }
++        jsval src;
++
++        if (!GetOutParamSource(i, &src))
++            return JS_FALSE;
+ 
+         if(paramInfo.IsOut())
+         {
+             dp->SetPtrIsData();
+             dp->ptr = &dp->val;
+ 
+             if(type.IsPointer() &&
+                type_tag != nsXPTType::T_INTERFACE &&
+@@ -2565,41 +2550,26 @@ CallMethodHelper::Call()
+             else
+                 datum_type = type;
+ 
+             if(datum_type.IsInterfacePointer())
+             {
+                 dp->SetValIsInterface();
+             }
+ 
+-            // set 'src' to be the object from which we get the value and
+-            // prepare for out param
++            jsval src;
++
++            if (!GetOutParamSource(i, &src))
++                return JS_FALSE;
+ 
+             if(paramInfo.IsOut())
+             {
+                 dp->SetPtrIsData();
+                 dp->ptr = &dp->val;
+ 
+-                if(!paramInfo.IsRetval()) {
+-                  NS_ASSERTION(i < argc || paramInfo.IsOptional(),
+-                               "Expected either enough arguments or an optional argument");
+-                  jsval arg = i < argc ? argv[i] : JSVAL_NULL;
+-                  if((JSVAL_IS_PRIMITIVE(arg) ||
+-                      !JS_GetPropertyById((*mCallContext), JSVAL_TO_OBJECT(arg),
+-                          rt->GetStringID(XPCJSRuntime::IDX_VALUE), &src))
+-                     && i < argc)
+-                  {
+-                      // Explicitly passed in unusable value for out param.
+-                      // Note that if i >= argc we already know that |arg| is
+-                      // JSVAL_NULL, and that's ok.
+-                      ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, i, (*mCallContext));
+-                      return JS_FALSE;
+-                  }
+-                }
+-
+                 if(datum_type.IsPointer() &&
+                    !datum_type.IsInterfacePointer() &&
+                    (isArray || !paramInfo.IsShared()))
+                 {
+                     useAllocator = JS_TRUE;
+                     dp->SetValIsAllocated();
+                 }
+ 
+@@ -2802,18 +2772,19 @@ CallMethodHelper::Call()
+         {
+             if(!mCallContext->GetReturnValueWasSet())
+                 mCallContext->SetRetVal(v);
+         }
+         else if(i < argc)
+         {
+             // we actually assured this before doing the invoke
+             NS_ASSERTION(JSVAL_IS_OBJECT(argv[i]), "out var is not object");
+-            if(!JS_SetPropertyById((*mCallContext), JSVAL_TO_OBJECT(argv[i]),
+-                        rt->GetStringID(XPCJSRuntime::IDX_VALUE), &v))
++            if(!JS_SetPropertyById((*mCallContext),
++                                   JSVAL_TO_OBJECT(argv[i]),
++                                   mIdxValueId, &v))
+             {
+                 ThrowBadParam(NS_ERROR_XPC_CANT_SET_OUT_VAL, i, (*mCallContext));
+                 return JS_FALSE;
+             }
+         }
+         else
+         {
+             NS_ASSERTION(paramInfo.IsOptional(),
+@@ -2959,16 +2930,50 @@ CallMethodHelper::GetInterfaceTypeFromPa
+         if(!p)
+             return ThrowBadParam(NS_ERROR_XPC_CANT_GET_PARAM_IFACE_INFO,
+                                  paramIndex, *mCallContext);
+         *result = *p;
+     }
+     return JS_TRUE;
+ }
+ 
++JSBool
++CallMethodHelper::GetOutParamSource(uint8 paramIndex, jsval* srcp) const
++{
++    const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(paramIndex);
++    
++    if((paramInfo.IsOut() || paramInfo.IsDipper()) &&
++       !paramInfo.IsRetval())
++    {
++        // TODO memberize/constify these
++        jsval* argv = mCallContext->GetArgv();
++        PRUint32 argc = mCallContext->GetArgc();
++        
++        NS_ASSERTION(paramIndex < argc || paramInfo.IsOptional(),
++                     "Expected either enough arguments or an optional argument");
++        jsval arg = paramIndex < argc ? argv[paramIndex] : JSVAL_NULL;
++        if(paramIndex < argc &&
++           (JSVAL_IS_PRIMITIVE(arg) ||
++            !JS_GetPropertyById(*mCallContext,
++                                JSVAL_TO_OBJECT(arg),
++                                mIdxValueId,
++                                srcp)))
++        {
++            // Explicitly passed in unusable value for out param.  Note
++            // that if i >= argc we already know that |arg| is JSVAL_NULL,
++            // and that's ok.
++            ThrowBadParam(NS_ERROR_XPC_NEED_OUT_OBJECT, paramIndex,
++                          *mCallContext);
++            return JS_FALSE;
++        }
++    }
++
++    return JS_TRUE;
++}
++
+ /***************************************************************************/
+ // interface methods
+ 
+ /* readonly attribute JSObjectPtr JSObject; */
+ NS_IMETHODIMP XPCWrappedNative::GetJSObject(JSObject * *aJSObject)
+ {
+     *aJSObject = mFlatJSObject;
+     return NS_OK;
