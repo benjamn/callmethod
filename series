@@ -9,3 +9,4 @@ eliminate-goto-done.diff
 simplify-helpers.diff
 GetOutParamSource.diff
 memberize-argv-argc.diff
+ccx-reference.diff
