@@ -1,0 +1,278 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2163,16 +2163,18 @@ class CallMethodHelper
+ 
+     JSBool
+     GetInterfaceTypeFromParam(uint8 paramIndex,
+                               const nsXPTType& datum_type,
+                               nsID* result) const;
+     
+     JSBool GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
+ 
++    JSBool GatherAndConvertResults();
++
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mVTableIndex(ccx.GetMethodIndex())
+         , mIdxValueId(ccx.GetRuntime()->GetStringID(XPCJSRuntime::IDX_VALUE))
+@@ -2686,122 +2688,17 @@ CallMethodHelper::Call()
+         ThrowBadResult(invokeResult, mCallContext);
+         return JS_FALSE;
+     }
+     else if(JS_IsExceptionPending(mCallContext))
+     {
+         return JS_FALSE;
+     }
+ 
+-    // now we iterate through the native params to gather and convert results
+-    for(i = 0; i < paramCount; i++)
+-    {
+-        uint8 dispatchParamIndex = i;
+-
+-        if (i >= mOptArgcIndex)
+-            dispatchParamIndex++;
+-
+-        const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+-        if(!paramInfo.IsOut() && !paramInfo.IsDipper())
+-            continue;
+-
+-        const nsXPTType& type = paramInfo.GetType();
+-        nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
+-        jsval v = JSVAL_NULL;
+-        AUTO_MARK_JSVAL(mCallContext, &v);
+-        JSUint32 array_count;
+-        nsXPTType datum_type;
+-        PRBool isArray = type.IsArray();
+-        PRBool isSizedString = isArray ?
+-                JS_FALSE :
+-                type.TagPart() == nsXPTType::T_PSTRING_SIZE_IS ||
+-                type.TagPart() == nsXPTType::T_PWSTRING_SIZE_IS;
+-
+-        if(isArray)
+-        {
+-            if(NS_FAILED(mIFaceInfo->GetTypeForParam(mVTableIndex, &paramInfo, 1,
+-                                                    &datum_type)))
+-            {
+-                Throw(NS_ERROR_XPC_CANT_GET_ARRAY_INFO, mCallContext);
+-                return JS_FALSE;
+-            }
+-        }
+-        else
+-            datum_type = type;
+-
+-        if(isArray || isSizedString)
+-        {
+-            if(!GetArraySizeFromParam(i, &array_count))
+-                return JS_FALSE;
+-        }
+-
+-        if(datum_type.IsInterfacePointer() &&
+-           !GetInterfaceTypeFromParam(i, datum_type, &param_iid))
+-            return JS_FALSE;
+-
+-        if(isArray)
+-        {
+-            XPCLazyCallContext lccx(mCallContext);
+-            if(!XPCConvert::NativeArray2JS(lccx, &v, (const void**)&dp->val,
+-                                           datum_type, &param_iid,
+-                                           array_count, mCallContext.GetCurrentJSObject(),
+-                                           &err))
+-            {
+-                // XXX need exception scheme for arrays to indicate bad element
+-                ThrowBadParam(err, i, mCallContext);
+-                return JS_FALSE;
+-            }
+-        }
+-        else if(isSizedString)
+-        {
+-            if(!XPCConvert::NativeStringWithSize2JS(mCallContext, &v,
+-                                           (const void*)&dp->val,
+-                                           datum_type,
+-                                           array_count, &err))
+-            {
+-                ThrowBadParam(err, i, mCallContext);
+-                return JS_FALSE;
+-            }
+-        }
+-        else
+-        {
+-            if(!XPCConvert::NativeData2JS(mCallContext, &v, &dp->val, datum_type,
+-                                          &param_iid,
+-                                          mCallContext.GetCurrentJSObject(), &err))
+-            {
+-                ThrowBadParam(err, i, mCallContext);
+-                return JS_FALSE;
+-            }
+-        }
+-
+-        if(paramInfo.IsRetval())
+-        {
+-            if(!mCallContext.GetReturnValueWasSet())
+-                mCallContext.SetRetVal(v);
+-        }
+-        else if(i < mArgc)
+-        {
+-            // we actually assured this before doing the invoke
+-            NS_ASSERTION(JSVAL_IS_OBJECT(mArgv[i]), "out var is not object");
+-            if(!JS_SetPropertyById(mCallContext,
+-                                   JSVAL_TO_OBJECT(mArgv[i]),
+-                                   mIdxValueId, &v))
+-            {
+-                ThrowBadParam(NS_ERROR_XPC_CANT_SET_OUT_VAL, i, mCallContext);
+-                return JS_FALSE;
+-            }
+-        }
+-        else
+-        {
+-            NS_ASSERTION(paramInfo.IsOptional(),
+-                         "Expected either enough arguments or an optional argument");
+-        }
+-    }
+-
+-    return JS_TRUE;
++    return GatherAndConvertResults();
+ }
+ 
+ CallMethodHelper::~CallMethodHelper()
+ {
+     uint8 paramCount = mMethodInfo->GetParamCount();
+     if (mDispatchParams.Length())
+     {
+         for(uint8 i = 0; i < paramCount; i++)
+@@ -2964,16 +2861,131 @@ CallMethodHelper::GetOutParamSource(uint
+                           mCallContext);
+             return JS_FALSE;
+         }
+     }
+ 
+     return JS_TRUE;
+ }
+ 
++JSBool
++CallMethodHelper::GatherAndConvertResults()
++{
++    // now we iterate through the native params to gather and convert results
++    uint8 paramCount = mMethodInfo->GetParamCount();
++    for(uint8 i = 0; i < paramCount; i++)
++    {
++        uint8 dispatchParamIndex = i;
++
++        if (i >= mOptArgcIndex)
++            dispatchParamIndex++;
++
++        const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
++        if(!paramInfo.IsOut() && !paramInfo.IsDipper())
++            continue;
++
++        const nsXPTType& type = paramInfo.GetType();
++        nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
++        jsval v = JSVAL_NULL;
++        AUTO_MARK_JSVAL(mCallContext, &v);
++        JSUint32 array_count;
++        nsXPTType datum_type;
++        PRBool isArray = type.IsArray();
++        PRBool isSizedString = isArray ?
++                JS_FALSE :
++                type.TagPart() == nsXPTType::T_PSTRING_SIZE_IS ||
++                type.TagPart() == nsXPTType::T_PWSTRING_SIZE_IS;
++
++        if(isArray)
++        {
++            if(NS_FAILED(mIFaceInfo->GetTypeForParam(mVTableIndex, &paramInfo, 1,
++                                                     &datum_type)))
++            {
++                Throw(NS_ERROR_XPC_CANT_GET_ARRAY_INFO, mCallContext);
++                return JS_FALSE;
++            }
++        }
++        else
++            datum_type = type;
++
++        if(isArray || isSizedString)
++        {
++            if(!GetArraySizeFromParam(i, &array_count))
++                return JS_FALSE;
++        }
++
++        nsID param_iid;
++        if(datum_type.IsInterfacePointer() &&
++           !GetInterfaceTypeFromParam(i, datum_type, &param_iid))
++            return JS_FALSE;
++
++        uintN err;
++
++        if(isArray)
++        {
++            XPCLazyCallContext lccx(mCallContext);
++            if(!XPCConvert::NativeArray2JS(lccx, &v, (const void**)&dp->val,
++                                           datum_type, &param_iid,
++                                           array_count, mCallContext.GetCurrentJSObject(),
++                                           &err))
++            {
++                // XXX need exception scheme for arrays to indicate bad element
++                ThrowBadParam(err, i, mCallContext);
++                return JS_FALSE;
++            }
++        }
++        else if(isSizedString)
++        {
++            if(!XPCConvert::NativeStringWithSize2JS(mCallContext, &v,
++                                                    (const void*)&dp->val,
++                                                    datum_type,
++                                                    array_count, &err))
++            {
++                ThrowBadParam(err, i, mCallContext);
++                return JS_FALSE;
++            }
++        }
++        else
++        {
++            if(!XPCConvert::NativeData2JS(mCallContext, &v, &dp->val, datum_type,
++                                          &param_iid,
++                                          mCallContext.GetCurrentJSObject(), &err))
++            {
++                ThrowBadParam(err, i, mCallContext);
++                return JS_FALSE;
++            }
++        }
++
++        if(paramInfo.IsRetval())
++        {
++            if(!mCallContext.GetReturnValueWasSet())
++                mCallContext.SetRetVal(v);
++        }
++        else if(i < mArgc)
++        {
++            // we actually assured this before doing the invoke
++            NS_ASSERTION(JSVAL_IS_OBJECT(mArgv[i]), "out var is not object");
++            if(!JS_SetPropertyById(mCallContext,
++                                   JSVAL_TO_OBJECT(mArgv[i]),
++                                   mIdxValueId, &v))
++            {
++                ThrowBadParam(NS_ERROR_XPC_CANT_SET_OUT_VAL, i, mCallContext);
++                return JS_FALSE;
++            }
++        }
++        else
++        {
++            NS_ASSERTION(paramInfo.IsOptional(),
++                         "Expected either enough arguments or an optional argument");
++        }
++    }
++
++    return JS_TRUE;
++}
++
+ /***************************************************************************/
+ // interface methods
+ 
+ /* readonly attribute JSObjectPtr JSObject; */
+ NS_IMETHODIMP XPCWrappedNative::GetJSObject(JSObject * *aJSObject)
+ {
+     *aJSObject = mFlatJSObject;
+     return NS_OK;

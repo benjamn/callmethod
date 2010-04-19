@@ -10,3 +10,7 @@ simplify-helpers.diff
 GetOutParamSource.diff
 memberize-argv-argc.diff
 ccx-reference.diff
+gather-and-convert-results.diff
+memberize-callee.diff
+QueryInterface-fast-path.diff
+local-variable-cleanup.diff

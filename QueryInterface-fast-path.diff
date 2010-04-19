@@ -1,0 +1,171 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2166,16 +2166,18 @@ class CallMethodHelper
+     GetInterfaceTypeFromParam(uint8 paramIndex,
+                               const nsXPTType& datum_type,
+                               nsID* result) const;
+     
+     JSBool GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
+ 
+     JSBool GatherAndConvertResults();
+ 
++    JSBool QueryInterfaceFastPath() const;
++
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mCallee(ccx.GetTearOff()->GetNative())
+         , mVTableIndex(ccx.GetMethodIndex())
+@@ -2273,71 +2275,19 @@ CallMethodHelper::Call()
+     XPCContext* xpcc = mCallContext.GetXPCContext();
+     XPCPerThreadData* tls = mCallContext.GetThreadData();
+ 
+     mCallContext.SetRetVal(JSVAL_VOID);
+ 
+     tls->SetException(nsnull);
+     xpcc->SetLastResult(NS_ERROR_UNEXPECTED);
+ 
+-    // fast-path QueryInterface: we already know the signature and can avoid a
+-    // lot of work
+     if(mVTableIndex == 0)
+     {
+-        if(mArgc < 1)
+-        {
+-            Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, mCallContext);
+-            return JS_FALSE;
+-        }
+-        const nsID* iid;
+-        JSObject* obj;
+-        if(!JSVAL_IS_OBJECT(mArgv[0]) ||
+-           (!(obj = JSVAL_TO_OBJECT(mArgv[0]))) ||
+-           (!(iid = xpc_JSObjectToID(mCallContext, obj))))
+-        {
+-            ThrowBadParam(NS_ERROR_XPC_BAD_CONVERT_JS, 0, mCallContext);
+-            return JS_FALSE;
+-        }
+-
+-        nsISupports* qiresult = nsnull;
+-        {
+-            if(XPCPerThreadData::IsMainThread(mCallContext))
+-            {
+-                invokeResult = mCallee->QueryInterface(*iid, (void**) &qiresult);
+-            }
+-            else
+-            {
+-                JSAutoSuspendRequest suspended(mCallContext);
+-                invokeResult = mCallee->QueryInterface(*iid, (void**) &qiresult);
+-            }
+-        }
+-
+-        xpcc->SetLastResult(invokeResult);
+-
+-        if(NS_FAILED(invokeResult))
+-        {
+-            ThrowBadResult(invokeResult, mCallContext);
+-            return JS_FALSE;
+-        }
+-
+-        jsval v = JSVAL_NULL;
+-        JSBool success =
+-            XPCConvert::NativeData2JS(mCallContext, &v, &qiresult, 
+-                                      nsXPTType::T_INTERFACE_IS | XPT_TDP_POINTER,
+-                                      iid, mCallContext.GetCurrentJSObject(), &err);
+-        NS_IF_RELEASE(qiresult);
+-
+-        if(!success)
+-        {
+-            ThrowBadParam(err, 0, mCallContext);
+-            return JS_FALSE;
+-        }
+-
+-        mCallContext.SetRetVal(v);
+-        return JS_TRUE;
++        return QueryInterfaceFastPath();
+     }
+ 
+     if(!mMethodInfo)
+     {
+         Throw(NS_ERROR_XPC_CANT_GET_METHOD_INFO, mCallContext);
+         return JS_FALSE;
+     }
+ 
+@@ -2977,16 +2927,75 @@ CallMethodHelper::GatherAndConvertResult
+             NS_ASSERTION(paramInfo.IsOptional(),
+                          "Expected either enough arguments or an optional argument");
+         }
+     }
+ 
+     return JS_TRUE;
+ }
+ 
++JSBool
++CallMethodHelper::QueryInterfaceFastPath() const
++{
++    NS_ASSERTION(mVTableIndex == 0,
++                 "Using the QI fast-path for a method other than QueryInterface");
++
++    if(mArgc < 1)
++    {
++        Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, mCallContext);
++        return JS_FALSE;
++    }
++    const nsID* iid;
++    JSObject* obj;
++    if(!JSVAL_IS_OBJECT(mArgv[0]) ||
++       (!(obj = JSVAL_TO_OBJECT(mArgv[0]))) ||
++       (!(iid = xpc_JSObjectToID(mCallContext, obj))))
++    {
++        ThrowBadParam(NS_ERROR_XPC_BAD_CONVERT_JS, 0, mCallContext);
++        return JS_FALSE;
++    }
++
++    nsresult invokeResult;
++    nsISupports* qiresult = nsnull;
++    if(XPCPerThreadData::IsMainThread(mCallContext))
++    {
++        invokeResult = mCallee->QueryInterface(*iid, (void**) &qiresult);
++    }
++    else
++    {
++        JSAutoSuspendRequest suspended(mCallContext);
++        invokeResult = mCallee->QueryInterface(*iid, (void**) &qiresult);
++    }
++
++    mCallContext.GetXPCContext()->SetLastResult(invokeResult);
++
++    if(NS_FAILED(invokeResult))
++    {
++        ThrowBadResult(invokeResult, mCallContext);
++        return JS_FALSE;
++    }
++
++    jsval v = JSVAL_NULL;
++    uintN err;
++    JSBool success =
++        XPCConvert::NativeData2JS(mCallContext, &v, &qiresult, 
++                                  nsXPTType::T_INTERFACE_IS | XPT_TDP_POINTER,
++                                  iid, mCallContext.GetCurrentJSObject(), &err);
++    NS_IF_RELEASE(qiresult);
++
++    if(!success)
++    {
++        ThrowBadParam(err, 0, mCallContext);
++        return JS_FALSE;
++    }
++
++    mCallContext.SetRetVal(v);
++    return JS_TRUE;
++}
++
+ /***************************************************************************/
+ // interface methods
+ 
+ /* readonly attribute JSObjectPtr JSObject; */
+ NS_IMETHODIMP XPCWrappedNative::GetJSObject(JSObject * *aJSObject)
+ {
+     *aJSObject = mFlatJSObject;
+     return NS_OK;

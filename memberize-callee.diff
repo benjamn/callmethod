@@ -1,0 +1,108 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2119,16 +2119,17 @@ static JSBool Throw(uintN errNum, XPCCal
+ 
+ /***************************************************************************/
+ 
+ class CallMethodHelper
+ {
+     XPCCallContext& mCallContext;
+     nsIInterfaceInfo* const mIFaceInfo;
+     const nsXPTMethodInfo* mMethodInfo;
++    nsISupports* const mCallee;
+     const uint16 mVTableIndex;
+     const jsid mIdxValueId;
+ 
+     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
+     uint8 mOptArgcIndex; // TODO make const
+ 
+     // Reserve space for one nsAutoString. We don't want the string itself
+     // to be declared as that would make the ctor and dtors run for each
+@@ -2171,16 +2172,17 @@ class CallMethodHelper
+     JSBool GatherAndConvertResults();
+ 
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
++        , mCallee(ccx.GetTearOff()->GetNative())
+         , mVTableIndex(ccx.GetMethodIndex())
+         , mIdxValueId(ccx.GetRuntime()->GetStringID(XPCJSRuntime::IDX_VALUE))
+         , mOptArgcIndex(PR_UINT8_MAX)
+         , mAutoStringUsed(PR_FALSE)
+         , mArgv(ccx.GetArgv())
+         , mArgc(ccx.GetArgc())
+ 
+     {
+@@ -2264,17 +2266,16 @@ CallMethodHelper::Call()
+     uint8 paramCount;
+     uint8 wantsOptArgc;
+     nsresult invokeResult;
+     nsID param_iid;
+     uintN err;
+     JSBool foundDependentParam;
+ 
+     XPCContext* xpcc = mCallContext.GetXPCContext();
+-    nsISupports* callee = mCallContext.GetTearOff()->GetNative();
+     XPCPerThreadData* tls = mCallContext.GetThreadData();
+ 
+     mCallContext.SetRetVal(JSVAL_VOID);
+ 
+     tls->SetException(nsnull);
+     xpcc->SetLastResult(NS_ERROR_UNEXPECTED);
+ 
+     // fast-path QueryInterface: we already know the signature and can avoid a
+@@ -2295,22 +2296,22 @@ CallMethodHelper::Call()
+             ThrowBadParam(NS_ERROR_XPC_BAD_CONVERT_JS, 0, mCallContext);
+             return JS_FALSE;
+         }
+ 
+         nsISupports* qiresult = nsnull;
+         {
+             if(XPCPerThreadData::IsMainThread(mCallContext))
+             {
+-                invokeResult = callee->QueryInterface(*iid, (void**) &qiresult);
++                invokeResult = mCallee->QueryInterface(*iid, (void**) &qiresult);
+             }
+             else
+             {
+                 JSAutoSuspendRequest suspended(mCallContext);
+-                invokeResult = callee->QueryInterface(*iid, (void**) &qiresult);
++                invokeResult = mCallee->QueryInterface(*iid, (void**) &qiresult);
+             }
+         }
+ 
+         xpcc->SetLastResult(invokeResult);
+ 
+         if(NS_FAILED(invokeResult))
+         {
+             ThrowBadResult(invokeResult, mCallContext);
+@@ -2665,23 +2666,23 @@ CallMethodHelper::Call()
+         dp->val.u8 = mArgc - requiredArgs;
+     }
+ 
+     // do the invoke
+     {
+         uint8 allParamCount = paramCount + wantsOptArgc;
+         if(XPCPerThreadData::IsMainThread(mCallContext))
+         {
+-            invokeResult = NS_InvokeByIndex(callee, mVTableIndex,
++            invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+                                             allParamCount, mDispatchParams.Elements());
+         }
+         else
+         {
+             JSAutoSuspendRequest suspended(mCallContext);
+-            invokeResult = NS_InvokeByIndex(callee, mVTableIndex,
++            invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+                                             allParamCount, mDispatchParams.Elements());
+         }
+     }
+ 
+     xpcc->SetLastResult(invokeResult);
+ 
+     if(NS_FAILED(invokeResult))
+     {

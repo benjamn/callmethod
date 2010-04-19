@@ -1,0 +1,214 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2258,49 +2258,37 @@ XPCWrappedNative::CallMethod(XPCCallCont
+     }
+ 
+     return CallMethodHelper(ccx).Call();
+ }
+ 
+ JSBool
+ CallMethodHelper::Call()
+ {
+-    uint8 i;
+-    uint8 requiredArgs;
+-    uint8 paramCount;
+-    uint8 wantsOptArgc;
+-    nsresult invokeResult;
+-    nsID param_iid;
+-    uintN err;
+-    JSBool foundDependentParam;
+-
+-    XPCContext* xpcc = mCallContext.GetXPCContext();
+-    XPCPerThreadData* tls = mCallContext.GetThreadData();
+-
+     mCallContext.SetRetVal(JSVAL_VOID);
+ 
+-    tls->SetException(nsnull);
+-    xpcc->SetLastResult(NS_ERROR_UNEXPECTED);
++    mCallContext.GetThreadData()->SetException(nsnull);
++    mCallContext.GetXPCContext()->SetLastResult(NS_ERROR_UNEXPECTED);
+ 
+     if(mVTableIndex == 0)
+     {
+         return QueryInterfaceFastPath();
+     }
+ 
+     if(!mMethodInfo)
+     {
+         Throw(NS_ERROR_XPC_CANT_GET_METHOD_INFO, mCallContext);
+         return JS_FALSE;
+     }
+ 
+-    wantsOptArgc = mMethodInfo->WantsOptArgc() ? 1 : 0;
++    const uint8 wantsOptArgc = mMethodInfo->WantsOptArgc() ? 1 : 0;
++    const uint8 paramCount = mMethodInfo->GetParamCount();
++    uint8 requiredArgs = paramCount;
+ 
+     // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
+-    paramCount = mMethodInfo->GetParamCount();
+-    requiredArgs = paramCount;
+     if(paramCount && mMethodInfo->GetParam(paramCount-1).IsRetval())
+         requiredArgs--;
+ 
+     if(mArgc < requiredArgs || wantsOptArgc)
+     {
+         if(wantsOptArgc)
+             mOptArgcIndex = requiredArgs;
+ 
+@@ -2310,29 +2298,29 @@ CallMethodHelper::Call()
+ 
+         if(mArgc < requiredArgs) {
+             Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, mCallContext);
+             return JS_FALSE;
+         }
+     }
+ 
+     // iterate through the params to clear flags (for safe cleanup later)
+-    for(i = 0; i < paramCount + wantsOptArgc; i++)
++    for(uint8 i = 0; i < paramCount + wantsOptArgc; i++)
+     {
+         nsXPTCVariant* dp = mDispatchParams.AppendElement();
+         dp->ClearFlags();
+         dp->val.p = nsnull;
+     }
+ 
+     // Iterate through the params doing conversions of independent params only.
+     // When we later convert the dependent params (if any) we will know that
+     // the params upon which they depend will have already been converted -
+     // regardless of ordering.
+-    foundDependentParam = JS_FALSE;
+-    for(i = 0; i < paramCount; i++)
++    JSBool foundDependentParam = JS_FALSE;
++    for(uint8 i = 0; i < paramCount; i++)
+     {
+         JSBool useAllocator = JS_FALSE;
+         const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+         const nsXPTType& type = paramInfo.GetType();
+         uint8 type_tag = type.TagPart();
+ 
+         if(type.IsDependent())
+         {
+@@ -2447,36 +2435,38 @@ CallMethodHelper::Call()
+             // Do this *after* the above because in the case where we have a
+             // "T_DOMSTRING && IsDipper()" then arg might be null since this
+             // is really an 'out' param masquerading as an 'in' param.
+             NS_ASSERTION(i < mArgc || paramInfo.IsOptional(),
+                          "Expected either enough arguments or an optional argument");
+             src = i < mArgc ? mArgv[i] : JSVAL_NULL;
+         }
+ 
++        nsID param_iid;
+         if(type_tag == nsXPTType::T_INTERFACE &&
+            NS_FAILED(mIFaceInfo->GetIIDForParamNoAlloc(mVTableIndex, &paramInfo,
+-                                               &param_iid)))
++                                                       &param_iid)))
+         {
+             ThrowBadParam(NS_ERROR_XPC_CANT_GET_PARAM_IFACE_INFO, i, mCallContext);
+             return JS_FALSE;
+         }
+ 
++        uintN err;
+         if(!XPCConvert::JSData2Native(mCallContext, &dp->val, src, type,
+                                       useAllocator, &param_iid, &err))
+         {
+             ThrowBadParam(err, i, mCallContext);
+             return JS_FALSE;
+         }
+     }
+ 
+     // if any params were dependent, then we must iterate again to convert them.
+     if(foundDependentParam)
+     {
+-        for(i = 0; i < paramCount; i++)
++        for(uint8 i = 0; i < paramCount; i++)
+         {
+             const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+             const nsXPTType& type = paramInfo.GetType();
+ 
+             if(!type.IsDependent())
+                 continue;
+ 
+             nsXPTType datum_type;
+@@ -2542,20 +2532,23 @@ CallMethodHelper::Call()
+                 if(datum_type.IsPointer() &&
+                    datum_type.TagPart() == nsXPTType::T_IID)
+                 {
+                     useAllocator = JS_TRUE;
+                     dp->SetValIsAllocated();
+                 }
+             }
+ 
++            nsID param_iid;
+             if(datum_type.IsInterfacePointer() &&
+                !GetInterfaceTypeFromParam(i, datum_type, &param_iid))
+                 return JS_FALSE;
+ 
++            uintN err;
++
+             if(isArray || isSizedString)
+             {
+                 if(!GetArraySizeFromParam(i, &array_capacity) ||
+                    !GetArrayLengthFromParam(i, &array_count))
+                     return JS_FALSE;
+ 
+                 if(isArray)
+                 {
+@@ -2611,40 +2604,41 @@ CallMethodHelper::Call()
+             mDispatchParams[paramCount] = *dp;
+         }
+ 
+         dp->ClearFlags();
+         dp->type = nsXPTType::T_U8;
+         dp->val.u8 = mArgc - requiredArgs;
+     }
+ 
+-    // do the invoke
++    nsresult invokeResult;
++
++    if(XPCPerThreadData::IsMainThread(mCallContext))
+     {
+-        uint8 allParamCount = paramCount + wantsOptArgc;
+-        if(XPCPerThreadData::IsMainThread(mCallContext))
+-        {
+-            invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+-                                            allParamCount, mDispatchParams.Elements());
+-        }
+-        else
+-        {
+-            JSAutoSuspendRequest suspended(mCallContext);
+-            invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+-                                            allParamCount, mDispatchParams.Elements());
+-        }
++        invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
++                                        mDispatchParams.Length(),
++                                        mDispatchParams.Elements());
+     }
+-
+-    xpcc->SetLastResult(invokeResult);
++    else
++    {
++        JSAutoSuspendRequest suspended(mCallContext);
++        invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
++                                        mDispatchParams.Length(),
++                                        mDispatchParams.Elements());
++    }
++
++    mCallContext.GetXPCContext()->SetLastResult(invokeResult);
+ 
+     if(NS_FAILED(invokeResult))
+     {
+         ThrowBadResult(invokeResult, mCallContext);
+         return JS_FALSE;
+     }
+-    else if(JS_IsExceptionPending(mCallContext))
++
++    if(JS_IsExceptionPending(mCallContext))
+     {
+         return JS_FALSE;
+     }
+ 
+     return GatherAndConvertResults();
+ }
+ 
+ CallMethodHelper::~CallMethodHelper()
