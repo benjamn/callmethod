@@ -1,0 +1,222 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2168,16 +2168,29 @@ class CallMethodHelper
+                               nsID* result) const;
+     
+     JSBool GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
+ 
+     JSBool GatherAndConvertResults();
+ 
+     JSBool QueryInterfaceFastPath() const;
+ 
++    nsXPTCVariant*
++    GetDispatchParam(uint8 paramIndex)
++    {
++        if (paramIndex >= mOptArgcIndex)
++            paramIndex += 1;
++        return &mDispatchParams[paramIndex];
++    }
++    const nsXPTCVariant*
++    GetDispatchParam(uint8 paramIndex) const
++    {
++        return const_cast<CallMethodHelper*>(this)->GetDispatchParam(paramIndex);
++    }
++
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mCallee(ccx.GetTearOff()->GetNative())
+         , mVTableIndex(ccx.GetMethodIndex())
+@@ -2305,16 +2318,24 @@ CallMethodHelper::Call()
+     // iterate through the params to clear flags (for safe cleanup later)
+     for(uint8 i = 0; i < paramCount + wantsOptArgc; i++)
+     {
+         nsXPTCVariant* dp = mDispatchParams.AppendElement();
+         dp->ClearFlags();
+         dp->val.p = nsnull;
+     }
+ 
++    // Fill in the optional_argc argument
++    if(wantsOptArgc)
++    {
++        nsXPTCVariant* dp = &mDispatchParams[mOptArgcIndex];
++        dp->type = nsXPTType::T_U8;
++        dp->val.u8 = mArgc - requiredArgs;
++    }
++
+     // Iterate through the params doing conversions of independent params only.
+     // When we later convert the dependent params (if any) we will know that
+     // the params upon which they depend will have already been converted -
+     // regardless of ordering.
+     JSBool foundDependentParam = JS_FALSE;
+     for(uint8 i = 0; i < paramCount; i++)
+     {
+         JSBool useAllocator = JS_FALSE;
+@@ -2323,17 +2344,17 @@ CallMethodHelper::Call()
+         uint8 type_tag = type.TagPart();
+ 
+         if(type.IsDependent())
+         {
+             foundDependentParam = JS_TRUE;
+             continue;
+         }
+ 
+-        nsXPTCVariant* dp = &mDispatchParams[i];
++        nsXPTCVariant* dp = GetDispatchParam(i);
+         dp->type = type;
+ 
+         if(type_tag == nsXPTType::T_INTERFACE)
+         {
+             dp->SetValIsInterface();
+         }
+ 
+         jsval src;
+@@ -2475,17 +2496,17 @@ CallMethodHelper::Call()
+             JSBool useAllocator = JS_FALSE;
+             PRBool isArray = type.IsArray();
+ 
+             PRBool isSizedString = isArray ?
+                     JS_FALSE :
+                     type.TagPart() == nsXPTType::T_PSTRING_SIZE_IS ||
+                     type.TagPart() == nsXPTType::T_PWSTRING_SIZE_IS;
+ 
+-            nsXPTCVariant* dp = &mDispatchParams[i];
++            nsXPTCVariant* dp = GetDispatchParam(i);
+             dp->type = type;
+ 
+             if(isArray)
+             {
+                 dp->SetValIsArray();
+ 
+                 if(NS_FAILED(mIFaceInfo->GetTypeForParam(mVTableIndex, &paramInfo, 1,
+                                                     &datum_type)))
+@@ -2586,34 +2607,16 @@ CallMethodHelper::Call()
+                 {
+                     ThrowBadParam(err, i, mCallContext);
+                     return JS_FALSE;
+                 }
+             }
+         }
+     }
+ 
+-    // Fill in the optional_argc argument
+-    if(wantsOptArgc)
+-    {
+-        nsXPTCVariant* dp = &mDispatchParams[mOptArgcIndex];
+-
+-        if(mOptArgcIndex != paramCount)
+-        {
+-            // The method has a return value, the return value must be
+-            // last so push it out one so that we'll have room to
+-            // insert the optional argc argument.
+-            mDispatchParams[paramCount] = *dp;
+-        }
+-
+-        dp->ClearFlags();
+-        dp->type = nsXPTType::T_U8;
+-        dp->val.u8 = mArgc - requiredArgs;
+-    }
+-
+     nsresult invokeResult;
+ 
+     if(XPCPerThreadData::IsMainThread(mCallContext))
+     {
+         invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+                                         mDispatchParams.Length(),
+                                         mDispatchParams.Elements());
+     }
+@@ -2643,22 +2646,17 @@ CallMethodHelper::Call()
+ 
+ CallMethodHelper::~CallMethodHelper()
+ {
+     uint8 paramCount = mMethodInfo->GetParamCount();
+     if (mDispatchParams.Length())
+     {
+         for(uint8 i = 0; i < paramCount; i++)
+         {
+-            uint8 dispatchParamIndex = i;
+-
+-            if (i >= mOptArgcIndex)
+-                dispatchParamIndex++;
+-
+-            nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
++            nsXPTCVariant* dp = GetDispatchParam(i);
+             void* p = dp->val.p;
+             if(!p)
+                 continue;
+ 
+             if(dp->IsValArray())
+             {
+                 // going to have to cleanup the array and perhaps its contents
+                 if(dp->IsValAllocated() || dp->IsValInterface())
+@@ -2731,17 +2729,17 @@ CallMethodHelper::GetArrayInfoFromParam(
+     if(NS_FAILED(rv))
+         return Throw(NS_ERROR_XPC_CANT_GET_ARRAY_INFO, mCallContext);
+ 
+     const nsXPTType& type = mMethodInfo->GetParam(paramIndex).GetType();
+     // The xpidl compiler ensures this. We reaffirm it for safety.
+     if(type.IsPointer() || type.TagPart() != nsXPTType::T_U32)
+         return Throw(NS_ERROR_XPC_CANT_GET_ARRAY_INFO, mCallContext);
+ 
+-    *result = mDispatchParams[paramIndex].val.u32;
++    *result = GetDispatchParam(paramIndex)->val.u32;
+ 
+     return JS_TRUE;
+ }
+ 
+ JSBool
+ CallMethodHelper::GetInterfaceTypeFromParam(uint8 paramIndex,
+                                             const nsXPTType& datum_type,
+                                             nsID* result) const
+@@ -2767,17 +2765,17 @@ CallMethodHelper::GetInterfaceTypeFromPa
+             return Throw(NS_ERROR_XPC_CANT_GET_ARRAY_INFO, mCallContext);
+ 
+         const nsXPTType& type = mMethodInfo->GetParam(paramIndex).GetType();
+         // The xpidl compiler ensures this. We reaffirm it for safety.
+         if(!type.IsPointer() || type.TagPart() != nsXPTType::T_IID)
+             return ThrowBadParam(NS_ERROR_XPC_CANT_GET_PARAM_IFACE_INFO,
+                                  paramIndex, mCallContext);
+ 
+-        nsID* p = (nsID*) mDispatchParams[paramIndex].val.p;
++        nsID* p = (nsID*) GetDispatchParam(paramIndex)->val.p;
+         if(!p)
+             return ThrowBadParam(NS_ERROR_XPC_CANT_GET_PARAM_IFACE_INFO,
+                                  paramIndex, mCallContext);
+         *result = *p;
+     }
+     return JS_TRUE;
+ }
+ 
+@@ -2813,27 +2811,22 @@ CallMethodHelper::GetOutParamSource(uint
+ 
+ JSBool
+ CallMethodHelper::GatherAndConvertResults()
+ {
+     // now we iterate through the native params to gather and convert results
+     uint8 paramCount = mMethodInfo->GetParamCount();
+     for(uint8 i = 0; i < paramCount; i++)
+     {
+-        uint8 dispatchParamIndex = i;
+-
+-        if (i >= mOptArgcIndex)
+-            dispatchParamIndex++;
+-
+         const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(i);
+         if(!paramInfo.IsOut() && !paramInfo.IsDipper())
+             continue;
+ 
+         const nsXPTType& type = paramInfo.GetType();
+-        nsXPTCVariant* dp = &mDispatchParams[dispatchParamIndex];
++        nsXPTCVariant* dp = GetDispatchParam(i);
+         jsval v = JSVAL_NULL;
+         AUTO_MARK_JSVAL(mCallContext, &v);
+         JSUint32 array_count;
+         nsXPTType datum_type;
+         PRBool isArray = type.IsArray();
+         PRBool isSizedString = isArray ?
+                 JS_FALSE :
+                 type.TagPart() == nsXPTType::T_PSTRING_SIZE_IS ||

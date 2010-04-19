@@ -1,0 +1,142 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2181,16 +2181,18 @@ class CallMethodHelper
+         return &mDispatchParams[paramIndex];
+     }
+     const nsXPTCVariant*
+     GetDispatchParam(uint8 paramIndex) const
+     {
+         return const_cast<CallMethodHelper*>(this)->GetDispatchParam(paramIndex);
+     }
+ 
++    JSBool InitializeDispatchParams();
++
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mCallee(ccx.GetTearOff()->GetNative())
+         , mVTableIndex(ccx.GetMethodIndex())
+@@ -2287,54 +2289,20 @@ CallMethodHelper::Call()
+     }
+ 
+     if(!mMethodInfo)
+     {
+         Throw(NS_ERROR_XPC_CANT_GET_METHOD_INFO, mCallContext);
+         return JS_FALSE;
+     }
+ 
+-    const uint8 wantsOptArgc = mMethodInfo->WantsOptArgc() ? 1 : 0;
+     const uint8 paramCount = mMethodInfo->GetParamCount();
+-    uint8 requiredArgs = paramCount;
+-
+-    // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
+-    if(paramCount && mMethodInfo->GetParam(paramCount-1).IsRetval())
+-        requiredArgs--;
+-
+-    if(mArgc < requiredArgs || wantsOptArgc)
+-    {
+-        if(wantsOptArgc)
+-            mOptArgcIndex = requiredArgs;
+-
+-        // skip over any optional arguments
+-        while(requiredArgs && mMethodInfo->GetParam(requiredArgs-1).IsOptional())
+-            requiredArgs--;
+-
+-        if(mArgc < requiredArgs) {
+-            Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, mCallContext);
+-            return JS_FALSE;
+-        }
+-    }
+-
+-    // iterate through the params to clear flags (for safe cleanup later)
+-    for(uint8 i = 0; i < paramCount + wantsOptArgc; i++)
+-    {
+-        nsXPTCVariant* dp = mDispatchParams.AppendElement();
+-        dp->ClearFlags();
+-        dp->val.p = nsnull;
+-    }
+-
+-    // Fill in the optional_argc argument
+-    if(wantsOptArgc)
+-    {
+-        nsXPTCVariant* dp = &mDispatchParams[mOptArgcIndex];
+-        dp->type = nsXPTType::T_U8;
+-        dp->val.u8 = mArgc - requiredArgs;
+-    }
++
++    if (!InitializeDispatchParams())
++        return JS_FALSE;
+ 
+     // Iterate through the params doing conversions of independent params only.
+     // When we later convert the dependent params (if any) we will know that
+     // the params upon which they depend will have already been converted -
+     // regardless of ordering.
+     JSBool foundDependentParam = JS_FALSE;
+     for(uint8 i = 0; i < paramCount; i++)
+     {
+@@ -2973,16 +2941,61 @@ CallMethodHelper::QueryInterfaceFastPath
+         ThrowBadParam(err, 0, mCallContext);
+         return JS_FALSE;
+     }
+ 
+     mCallContext.SetRetVal(v);
+     return JS_TRUE;
+ }
+ 
++JSBool
++CallMethodHelper::InitializeDispatchParams()
++{
++    const uint8 wantsOptArgc = mMethodInfo->WantsOptArgc() ? 1 : 0;
++    const uint8 paramCount = mMethodInfo->GetParamCount();
++    uint8 requiredArgs = paramCount;
++
++    // XXX ASSUMES that retval is last arg. The xpidl compiler ensures this.
++    if(paramCount && mMethodInfo->GetParam(paramCount-1).IsRetval())
++        requiredArgs--;
++
++    if(mArgc < requiredArgs || wantsOptArgc)
++    {
++        if(wantsOptArgc)
++            mOptArgcIndex = requiredArgs;
++
++        // skip over any optional arguments
++        while(requiredArgs && mMethodInfo->GetParam(requiredArgs-1).IsOptional())
++            requiredArgs--;
++
++        if(mArgc < requiredArgs) {
++            Throw(NS_ERROR_XPC_NOT_ENOUGH_ARGS, mCallContext);
++            return JS_FALSE;
++        }
++    }
++
++    // iterate through the params to clear flags (for safe cleanup later)
++    for(uint8 i = 0; i < paramCount + wantsOptArgc; i++)
++    {
++        nsXPTCVariant* dp = mDispatchParams.AppendElement();
++        dp->ClearFlags();
++        dp->val.p = nsnull;
++    }
++
++    // Fill in the optional_argc argument
++    if(wantsOptArgc)
++    {
++        nsXPTCVariant* dp = &mDispatchParams[mOptArgcIndex];
++        dp->type = nsXPTType::T_U8;
++        dp->val.u8 = mArgc - requiredArgs;
++    }
++
++    return JS_TRUE;
++}
++
+ /***************************************************************************/
+ // interface methods
+ 
+ /* readonly attribute JSObjectPtr JSObject; */
+ NS_IMETHODIMP XPCWrappedNative::GetJSObject(JSObject * *aJSObject)
+ {
+     *aJSObject = mFlatJSObject;
+     return NS_OK;
