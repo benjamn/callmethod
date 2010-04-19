@@ -1,0 +1,89 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2186,16 +2186,18 @@ class CallMethodHelper
+         return const_cast<CallMethodHelper*>(this)->GetDispatchParam(paramIndex);
+     }
+ 
+     JSBool InitializeDispatchParams();
+ 
+     JSBool ConvertIndependentParams(JSBool* foundDependentParam);
+     JSBool ConvertDependentParams();
+ 
++    nsresult Invoke();
++
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mCallee(ccx.GetTearOff()->GetNative())
+         , mVTableIndex(ccx.GetMethodIndex())
+@@ -2306,31 +2308,17 @@ CallMethodHelper::Call()
+     // regardless of ordering.
+     JSBool foundDependentParam = JS_FALSE;
+     if(!ConvertIndependentParams(&foundDependentParam))
+         return JS_FALSE;
+ 
+     if(foundDependentParam && !ConvertDependentParams())
+         return JS_FALSE;
+ 
+-    nsresult invokeResult;
+-
+-    if(XPCPerThreadData::IsMainThread(mCallContext))
+-    {
+-        invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+-                                        mDispatchParams.Length(),
+-                                        mDispatchParams.Elements());
+-    }
+-    else
+-    {
+-        JSAutoSuspendRequest suspended(mCallContext);
+-        invokeResult = NS_InvokeByIndex(mCallee, mVTableIndex,
+-                                        mDispatchParams.Length(),
+-                                        mDispatchParams.Elements());
+-    }
++    nsresult invokeResult = Invoke();
+ 
+     mCallContext.GetXPCContext()->SetLastResult(invokeResult);
+ 
+     if(NS_FAILED(invokeResult))
+     {
+         ThrowBadResult(invokeResult, mCallContext);
+         return JS_FALSE;
+     }
+@@ -3003,16 +2991,33 @@ CallMethodHelper::ConvertDependentParams
+                 return JS_FALSE;
+             }
+         }
+     }
+ 
+     return JS_TRUE;
+ }
+ 
++nsresult
++CallMethodHelper::Invoke()
++{
++    PRUint32 argc = mDispatchParams.Length();
++    nsXPTCVariant* argv = mDispatchParams.Elements();
++
++    if(XPCPerThreadData::IsMainThread(mCallContext))
++    {
++        return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
++    }
++    else
++    {
++        JSAutoSuspendRequest suspended(mCallContext);
++        return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
++    }
++}
++
+ /***************************************************************************/
+ // interface methods
+ 
+ /* readonly attribute JSObjectPtr JSObject; */
+ NS_IMETHODIMP XPCWrappedNative::GetJSObject(JSObject * *aJSObject)
+ {
+     *aJSObject = mFlatJSObject;
+     return NS_OK;
