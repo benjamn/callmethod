@@ -16,3 +16,4 @@ QueryInterface-fast-path.diff
 local-variable-cleanup.diff
 GetDispatchParam.diff
 initialize-dispatch-params.diff
+convert-params.diff
