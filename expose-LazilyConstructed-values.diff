@@ -1,0 +1,51 @@
+Bug 560412 - Publicly expose the values of LazilyConstructed<T> objects.
+
+diff --git a/js/src/jstl.h b/js/src/jstl.h
+--- a/js/src/jstl.h
++++ b/js/src/jstl.h
+@@ -265,17 +265,17 @@ class LazilyConstructed
+ 
+     T &asT() { return *reinterpret_cast<T *>(bytes); }
+     char & constructed() { return bytes[sizeof(T)]; }
+ 
+   public:
+     LazilyConstructed() { constructed() = false; }
+     ~LazilyConstructed() { if (constructed()) asT().~T(); }
+ 
+-    bool empty() const { return !constructed(); }
++    bool empty() const { return !bytes[sizeof(T)]; }
+ 
+     void construct() {
+         JS_ASSERT(!constructed());
+         new(bytes) T();
+         constructed() = true;
+     }
+ 
+     template <class T1>
+@@ -293,16 +293,26 @@ class LazilyConstructed
+     }
+ 
+     template <class T1, class T2, class T3>
+     void construct(const T1 &t1, const T2 &t2, const T3 &t3) {
+         JS_ASSERT(!constructed());
+         new(bytes) T(t1, t2, t3);
+         constructed() = true;
+     }
++
++    T *addr() {
++        JS_ASSERT(constructed());
++        return &asT();
++    }
++
++    T &ref() {
++        JS_ASSERT(constructed());
++        return asT();
++    }
+ };
+ 
+ 
+ template <class T>
+ class Conditionally {
+     LazilyConstructed<T> t;
+ 
+   public:

@@ -1,0 +1,101 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2141,62 +2141,65 @@ class CallMethodHelper
+     jsval* const mArgv;
+     const PRUint32 mArgc;
+ 
+     enum SizeMode {
+         eGetSize,
+         eGetLength
+     };
+ 
+-    JSBool
++    JS_ALWAYS_INLINE JSBool
+     GetArrayInfoFromParam(uint8 paramIndex, SizeMode mode,
+                           JSUint32* result) const;
+ 
+     JSBool
+     GetArraySizeFromParam(uint8 paramIndex, JSUint32* result) const
+     {
+         return GetArrayInfoFromParam(paramIndex, eGetSize, result);
+     }
+ 
+     JSBool
+     GetArrayLengthFromParam(uint8 paramIndex, JSUint32* result) const
+     {
+         return GetArrayInfoFromParam(paramIndex, eGetLength, result);
+     }
+ 
+-    JSBool
++    JS_ALWAYS_INLINE JSBool
+     GetInterfaceTypeFromParam(uint8 paramIndex,
+                               const nsXPTType& datum_type,
+                               nsID* result) const;
+ 
+-    JSBool GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
+-
+-    JSBool GatherAndConvertResults();
+-
+-    JSBool QueryInterfaceFastPath() const;
++    JS_ALWAYS_INLINE JSBool
++    GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
++
++    JS_ALWAYS_INLINE JSBool
++    GatherAndConvertResults();
++
++    JS_ALWAYS_INLINE JSBool
++    QueryInterfaceFastPath() const;
+ 
+     nsXPTCVariant*
+     GetDispatchParam(uint8 paramIndex)
+     {
+         if (paramIndex >= mOptArgcIndex)
+             paramIndex += 1;
+         return &mDispatchParams[paramIndex];
+     }
+     const nsXPTCVariant*
+     GetDispatchParam(uint8 paramIndex) const
+     {
+         return const_cast<CallMethodHelper*>(this)->GetDispatchParam(paramIndex);
+     }
+ 
+-    JSBool InitializeDispatchParams();
+-
+-    JSBool ConvertIndependentParams(JSBool* foundDependentParam);
+-    JSBool ConvertDependentParams();
+-
+-    nsresult Invoke();
++    JS_ALWAYS_INLINE JSBool InitializeDispatchParams();
++
++    JS_ALWAYS_INLINE JSBool ConvertIndependentParams(JSBool* foundDependentParam);
++    JS_ALWAYS_INLINE JSBool ConvertDependentParams();
++
++    JS_ALWAYS_INLINE nsresult Invoke();
+ 
+ public:
+ 
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mCallee(ccx.GetTearOff()->GetNative())
+@@ -2208,17 +2211,17 @@ public:
+ 
+     {
+         // Success checked later.
+         mIFaceInfo->GetMethodInfo(mVTableIndex, &mMethodInfo);
+     }
+ 
+     ~CallMethodHelper();
+ 
+-    JSBool Call();
++    JS_ALWAYS_INLINE JSBool Call();
+ 
+ };
+ 
+ // static
+ NS_SUPPRESS_STACK_CHECK JSBool
+ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
+                              CallMode mode /*= CALL_METHOD */)
+ {

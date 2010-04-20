@@ -18,3 +18,8 @@ GetDispatchParam.diff
 initialize-dispatch-params.diff
 convert-params.diff
 extract-invoke.diff
+expose-LazilyConstructed-values.diff
+lazily-construct-mAutoString.diff
+nuke-else-after-return.diff
+delete-trailing-whitespace.diff
+add-JS_ALWAYS_INLINEs.diff

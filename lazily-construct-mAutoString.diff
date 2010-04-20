@@ -1,0 +1,117 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -42,16 +42,17 @@
+ /* Wrapper object for reflecting native xpcom objects into JavaScript. */
+ 
+ #include "xpcprivate.h"
+ #include "nsCRT.h"
+ #include "XPCNativeWrapper.h"
+ #include "XPCWrapper.h"
+ #include "nsWrapperCache.h"
+ #include "xpclog.h"
++#include "jstl.h"
+ 
+ /***************************************************************************/
+ 
+ NS_IMPL_CYCLE_COLLECTION_CLASS(XPCWrappedNative)
+ 
+ NS_IMETHODIMP
+ NS_CYCLE_COLLECTION_CLASSNAME(XPCWrappedNative)::RootAndUnlinkJSObjects(void *p)
+ {
+@@ -2130,18 +2131,17 @@ class CallMethodHelper
+ 
+     nsAutoTArray<nsXPTCVariant, 8> mDispatchParams;
+     uint8 mOptArgcIndex; // TODO make const
+ 
+     // Reserve space for one nsAutoString. We don't want the string itself
+     // to be declared as that would make the ctor and dtors run for each
+     // CallMethodHelper instantiation, and they're only needed in a
+     // fraction of all the calls that come through here.
+-    char mAutoString[sizeof(nsAutoString)];
+-    PRBool mAutoStringUsed;
++    js::LazilyConstructed<nsAutoString> mAutoString;
+ 
+     jsval* const mArgv;
+     const PRUint32 mArgc;
+ 
+     enum SizeMode {
+         eGetSize,
+         eGetLength
+     };
+@@ -2198,17 +2198,16 @@ public:
+     CallMethodHelper(XPCCallContext& ccx)
+         : mCallContext(ccx)
+         , mIFaceInfo(ccx.GetInterface()->GetInterfaceInfo())
+         , mMethodInfo(nsnull)
+         , mCallee(ccx.GetTearOff()->GetNative())
+         , mVTableIndex(ccx.GetMethodIndex())
+         , mIdxValueId(ccx.GetRuntime()->GetStringID(XPCJSRuntime::IDX_VALUE))
+         , mOptArgcIndex(PR_UINT8_MAX)
+-        , mAutoStringUsed(PR_FALSE)
+         , mArgv(ccx.GetArgv())
+         , mArgc(ccx.GetArgc())
+ 
+     {
+         // Success checked later.
+         mIFaceInfo->GetMethodInfo(mVTableIndex, &mMethodInfo);
+     }
+ 
+@@ -2385,24 +2384,16 @@ CallMethodHelper::~CallMethodHelper()
+             else if(dp->IsValDOMString())
+                 mCallContext.DeleteString((nsAString*)p);
+             else if(dp->IsValUTF8String())
+                 delete (nsCString*) p;
+             else if(dp->IsValCString())
+                 delete (nsCString*) p;
+         }
+     }
+-
+-    if (mAutoStringUsed) {
+-        // Our stack based nsAutoString was used, clean it up.
+-
+-        nsAutoString *s = (nsAutoString*)&mAutoString;
+-
+-        s->~nsAutoString();
+-    }
+ }
+ 
+ JSBool
+ CallMethodHelper::GetArrayInfoFromParam(uint8 paramIndex, SizeMode mode,
+                                         JSUint32* result) const
+ {
+     nsresult rv;
+     const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(paramIndex);
+@@ -2772,29 +2763,22 @@ CallMethodHelper::ConvertIndependentPara
+ 
+                 case nsXPTType::T_DOMSTRING:
+                     if(paramInfo.IsDipper())
+                     {
+                         // Is an 'out' DOMString. Make a new nsAString
+                         // now and then continue in order to skip the call to
+                         // JSData2Native
+ 
+-                        if(!mAutoStringUsed)
++                        if(mAutoString.empty())
+                         {
+-                            // Our stack space for an nsAutoString is
+-                            // still available, initialize the string
+-                            // object (using placement new) and use
+-                            // it.
+-                            nsAutoString *s = (nsAutoString*)&mAutoString;
+-                            new (s) nsAutoString();
+-                            mAutoStringUsed = PR_TRUE;
+-
++                            mAutoString.construct();
+                             // Don't call SetValIsDOMString because we don't 
+                             // want to delete this pointer.
+-                            dp->val.p = s;
++                            dp->val.p = mAutoString.addr();
+                             continue;
+                         }
+ 
+                         dp->SetValIsDOMString();
+                         if(!(dp->val.p = new nsAutoString()))
+                         {
+                             JS_ReportOutOfMemory(mCallContext);
+                             return JS_FALSE;

@@ -1,0 +1,31 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2982,24 +2982,20 @@ CallMethodHelper::ConvertDependentParams
+ 
+ nsresult
+ CallMethodHelper::Invoke()
+ {
+     PRUint32 argc = mDispatchParams.Length();
+     nsXPTCVariant* argv = mDispatchParams.Elements();
+ 
+     if(XPCPerThreadData::IsMainThread(mCallContext))
+-    {
+         return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
+-    }
+-    else
+-    {
+-        JSAutoSuspendRequest suspended(mCallContext);
+-        return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
+-    }
++
++    JSAutoSuspendRequest suspended(mCallContext);
++    return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
+ }
+ 
+ /***************************************************************************/
+ // interface methods
+ 
+ /* readonly attribute JSObjectPtr JSObject; */
+ NS_IMETHODIMP XPCWrappedNative::GetJSObject(JSObject * *aJSObject)
+ {

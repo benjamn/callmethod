@@ -1,0 +1,128 @@
+diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xpcwrappednative.cpp
+--- a/js/src/xpconnect/src/xpcwrappednative.cpp
++++ b/js/src/xpconnect/src/xpcwrappednative.cpp
+@@ -2161,17 +2161,17 @@ class CallMethodHelper
+     {
+         return GetArrayInfoFromParam(paramIndex, eGetLength, result);
+     }
+ 
+     JSBool
+     GetInterfaceTypeFromParam(uint8 paramIndex,
+                               const nsXPTType& datum_type,
+                               nsID* result) const;
+-    
++
+     JSBool GetOutParamSource(uint8 paramIndex, jsval* srcp) const;
+ 
+     JSBool GatherAndConvertResults();
+ 
+     JSBool QueryInterfaceFastPath() const;
+ 
+     nsXPTCVariant*
+     GetDispatchParam(uint8 paramIndex)
+@@ -2220,23 +2220,23 @@ public:
+ // static
+ NS_SUPPRESS_STACK_CHECK JSBool
+ XPCWrappedNative::CallMethod(XPCCallContext& ccx,
+                              CallMode mode /*= CALL_METHOD */)
+ {
+     XPCContext* xpcc = ccx.GetXPCContext();
+     NS_ASSERTION(xpcc->CallerTypeIsJavaScript(),
+                  "Native caller for XPCWrappedNative::CallMethod?");
+-    
++
+     nsresult rv = ccx.CanCallNow();
+     if(NS_FAILED(rv))
+     {
+         // If the security manager is complaining then this is not really an
+         // internal error in xpconnect. So, no reason to botch the assertion.
+-        NS_ASSERTION(rv == NS_ERROR_XPC_SECURITY_MANAGER_VETO, 
++        NS_ASSERTION(rv == NS_ERROR_XPC_SECURITY_MANAGER_VETO,
+                      "hmm? CanCallNow failed in XPCWrappedNative::CallMethod. "
+                      "We are finding out about this late!");
+         return Throw(rv, ccx);
+     }
+ 
+     DEBUG_TrackWrapperCall(ccx.GetWrapper(), mode);
+ 
+     // set up the method index and do the security check if needed
+@@ -2456,17 +2456,17 @@ CallMethodHelper::GetInterfaceTypeFromPa
+     }
+     return JS_TRUE;
+ }
+ 
+ JSBool
+ CallMethodHelper::GetOutParamSource(uint8 paramIndex, jsval* srcp) const
+ {
+     const nsXPTParamInfo& paramInfo = mMethodInfo->GetParam(paramIndex);
+-    
++
+     if((paramInfo.IsOut() || paramInfo.IsDipper()) &&
+        !paramInfo.IsRetval())
+     {
+         NS_ASSERTION(paramIndex < mArgc || paramInfo.IsOptional(),
+                      "Expected either enough arguments or an optional argument");
+         jsval arg = paramIndex < mArgc ? mArgv[paramIndex] : JSVAL_NULL;
+         if(paramIndex < mArgc &&
+            (JSVAL_IS_PRIMITIVE(arg) ||
+@@ -2636,17 +2636,17 @@ CallMethodHelper::QueryInterfaceFastPath
+     {
+         ThrowBadResult(invokeResult, mCallContext);
+         return JS_FALSE;
+     }
+ 
+     jsval v = JSVAL_NULL;
+     uintN err;
+     JSBool success =
+-        XPCConvert::NativeData2JS(mCallContext, &v, &qiresult, 
++        XPCConvert::NativeData2JS(mCallContext, &v, &qiresult,
+                                   nsXPTType::T_INTERFACE_IS | XPT_TDP_POINTER,
+                                   iid, mCallContext.GetCurrentJSObject(), &err);
+     NS_IF_RELEASE(qiresult);
+ 
+     if(!success)
+     {
+         ThrowBadParam(err, 0, mCallContext);
+         return JS_FALSE;
+@@ -2766,17 +2766,17 @@ CallMethodHelper::ConvertIndependentPara
+                     {
+                         // Is an 'out' DOMString. Make a new nsAString
+                         // now and then continue in order to skip the call to
+                         // JSData2Native
+ 
+                         if(mAutoString.empty())
+                         {
+                             mAutoString.construct();
+-                            // Don't call SetValIsDOMString because we don't 
++                            // Don't call SetValIsDOMString because we don't
+                             // want to delete this pointer.
+                             dp->val.p = mAutoString.addr();
+                             continue;
+                         }
+ 
+                         dp->SetValIsDOMString();
+                         if(!(dp->val.p = new nsAutoString()))
+                         {
+@@ -2789,19 +2789,19 @@ CallMethodHelper::ConvertIndependentPara
+ 
+                     // Is an 'in' DOMString. Set 'useAllocator' to indicate
+                     // that JSData2Native should allocate a new
+                     // nsAString.
+                     dp->SetValIsDOMString();
+                     useAllocator = JS_TRUE;
+                     break;
+ 
+-                case nsXPTType::T_UTF8STRING:                    
+-                    // Fall through to the C string case for now...                    
+-                case nsXPTType::T_CSTRING:                    
++                case nsXPTType::T_UTF8STRING:
++                    // Fall through to the C string case for now...
++                case nsXPTType::T_CSTRING:
+                     dp->SetValIsCString();
+                     if(paramInfo.IsDipper())
+                     {
+                         // Is an 'out' CString.
+                         if(!(dp->val.p = new nsCString()))
+                         {
+                             JS_ReportOutOfMemory(mCallContext);
+                             return JS_FALSE;
