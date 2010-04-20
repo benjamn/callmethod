@@ -53,7 +53,7 @@ diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xp
          ThrowBadResult(invokeResult, mCallContext);
          return JS_FALSE;
      }
-@@ -3003,16 +2991,33 @@ CallMethodHelper::ConvertDependentParams
+@@ -3003,16 +2991,29 @@ CallMethodHelper::ConvertDependentParams
                  return JS_FALSE;
              }
          }
@@ -69,14 +69,10 @@ diff --git a/js/src/xpconnect/src/xpcwrappednative.cpp b/js/src/xpconnect/src/xp
 +    nsXPTCVariant* argv = mDispatchParams.Elements();
 +
 +    if(XPCPerThreadData::IsMainThread(mCallContext))
-+    {
 +        return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
-+    }
-+    else
-+    {
-+        JSAutoSuspendRequest suspended(mCallContext);
-+        return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
-+    }
++
++    JSAutoSuspendRequest suspended(mCallContext);
++    return NS_InvokeByIndex(mCallee, mVTableIndex, argc, argv);
 +}
 +
  /***************************************************************************/
